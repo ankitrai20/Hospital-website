@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import './App.css'
 
 const doctors = [
@@ -34,7 +34,9 @@ const departments = [
 ]
 
 function App() {
-  const [confirmation, setConfirmation] = useState('')
+  const [feedback, setFeedback] = useState({ type: '', message: '' })
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const requestId = useRef(null)
   const [minimumDate] = useState(() => {
     const today = new Date()
     return [
@@ -44,16 +46,68 @@ function App() {
     ].join('-')
   })
 
-  function handleSubmit(event) {
+  async function handleSubmit(event) {
     event.preventDefault()
     const form = event.currentTarget
 
     if (!form.reportValidity()) return
 
-    const patientName = new FormData(form).get('patient-name')
-    setConfirmation(
-      `Thanks, ${patientName}. Your request has been recorded in this demo only. No appointment has been booked and no information was sent.`,
-    )
+    const formData = new FormData(form)
+    const appointment = {
+      patientName: formData.get('patient-name').trim(),
+      phone: formData.get('phone').trim(),
+      department: formData.get('department'),
+      preferredDate: formData.get('preferred-date'),
+      preferredTime: formData.get('preferred-time'),
+    }
+
+    if (!requestId.current) {
+      requestId.current = globalThis.crypto.randomUUID()
+    }
+
+    setIsSubmitting(true)
+    setFeedback({ type: '', message: '' })
+
+    try {
+      const response = await fetch('http://localhost:5000/api/appointments', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': requestId.current,
+        },
+        body: JSON.stringify(appointment),
+      })
+
+      let result
+      try {
+        result = await response.json()
+      } catch {
+        throw new Error('The server returned an unexpected response. Please try again.')
+      }
+
+      if (!response.ok || !result.success) {
+        const details = result.errors
+          ? ` ${Object.values(result.errors).join(' ')}`
+          : ''
+        throw new Error(`${result.message || 'We could not submit your request.'}${details}`)
+      }
+
+      form.reset()
+      requestId.current = null
+      setFeedback({
+        type: 'success',
+        message: result.message || 'Your appointment request was received. The hospital will contact you to confirm availability.',
+      })
+    } catch (error) {
+      setFeedback({
+        type: 'error',
+        message: error instanceof TypeError
+          ? 'We could not connect to the CarePlus server. Please check that the backend is running and try again.'
+          : error.message,
+      })
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   return (
@@ -165,8 +219,9 @@ function App() {
               <p className="eyebrow">TAKE THE NEXT STEP</p>
               <h2 id="appointment-title">Request an appointment</h2>
               <p>
-                Share your preferred visit details below. This demo form
-                provides on-page feedback only and does not book a visit.
+                Share your preferred visit details below.                 Submit your preferred visit details and our team will contact
+                you to confirm availability. Submitting a request does not
+                confirm an appointment.
               </p>
               <div className="appointment-assurance">
                 <span aria-hidden="true">✓</span>
@@ -230,14 +285,19 @@ function App() {
                   </select>
                 </div>
               </div>
-              <button className="appointment-btn submit-btn" type="submit">
-                Send demo request
+              <button className="appointment-btn submit-btn" type="submit" disabled={isSubmitting}>
+                {isSubmitting ? 'Sending request…' : 'Send appointment request'}
               </button>
               <p className="form-note">
-                Demo only · No appointment is booked · No data is sent
+                Your information is sent securely to CarePlus to process this request.
               </p>
-              <p className="form-confirmation" role="status" aria-live="polite">
-                {confirmation}
+              <p
+                className={`form-confirmation${feedback.type === 'error' ? ' form-error' : ''}`}
+                role={feedback.type === 'error' ? 'alert' : 'status'}
+                aria-live={feedback.type === 'error' ? 'assertive' : 'polite'}
+                aria-atomic="true"
+              >
+                {feedback.message}
               </p>
             </form>
           </div>
